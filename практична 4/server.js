@@ -1,11 +1,11 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const express = require('express');
 const cookieParser = require('cookie-parser');
-const config = require('./config');
+const config = require('./config'); 
 const path = require('node:path');
 const https = require('https');
 const fs = require('fs');
-const WebSocket = require('ws'); 
+const WebSocket = require('ws');
 
 const app = express();
 const PORT = 3000;
@@ -15,7 +15,7 @@ const pfxPath = path.join(__dirname, PFX_FILENAME);
 
 const BINANCE_WS_URL_BTC = 'wss://stream.binance.com:9443/ws/btcusdt@trade';
 const BINANCE_WS_URL_ETH = 'wss://stream.binance.com:9443/ws/ethusdt@trade';
-const BINANCE_WS_URL_DOGE = 'wss://stream.binance.com:9443/ws/dogeusdt@trade'; 
+const BINANCE_WS_URL_DOGE = 'wss://stream.binance.com:9443/ws/dogeusdt@trade';
 
 app.use(cookieParser());
 app.use(express.json());
@@ -23,7 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 
 let binanceWsBtc = null;
 let binanceWsEth = null;
-let binanceWsDoge = null; 
+let binanceWsDoge = null;
 
 function setupBinanceWebSocket(currencyPair) {
     let wsUrl;
@@ -41,7 +41,7 @@ function setupBinanceWebSocket(currencyPair) {
             currentBinanceWs = binanceWsEth;
             updateBinanceWsRef = (ws) => { binanceWsEth = ws; };
             break;
-        case 'DOGEUSDT': 
+        case 'DOGEUSDT':
             wsUrl = BINANCE_WS_URL_DOGE;
             currentBinanceWs = binanceWsDoge;
             updateBinanceWsRef = (ws) => { binanceWsDoge = ws; };
@@ -58,16 +58,15 @@ function setupBinanceWebSocket(currencyPair) {
 
     console.log(`Connecting to Binance WebSocket for ${currencyPair}...`);
     currentBinanceWs = new WebSocket(wsUrl);
-    updateBinanceWsRef(currentBinanceWs); 
+    updateBinanceWsRef(currentBinanceWs);
 
     currentBinanceWs.onopen = () => {
         console.log(`Connected to Binance WebSocket API for ${currencyPair}`);
     };
 
     currentBinanceWs.onmessage = message => {
-
         const dataWithPair = JSON.parse(message.data);
-        dataWithPair.currencyPair = currencyPair; 
+        dataWithPair.currencyPair = currencyPair;
 
         wss.clients.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
@@ -81,7 +80,7 @@ function setupBinanceWebSocket(currencyPair) {
         if (currentBinanceWs) {
             currentBinanceWs.close();
         }
-        updateBinanceWsRef(null); 
+        updateBinanceWsRef(null);
     };
 
     currentBinanceWs.onclose = () => {
@@ -90,6 +89,41 @@ function setupBinanceWebSocket(currencyPair) {
     };
     return currentBinanceWs;
 }
+
+function parseAccessTokenFromCookie(cookieHeader) {
+    if (!cookieHeader) {
+        return null;
+    }
+    const cookies = cookieHeader.split(';');
+    for (const cookie of cookies) {
+        const parts = cookie.trim().split('=');
+        if (parts[0] === 'access_token') {
+            return parts[1];
+        }
+    }
+    return null;
+}
+
+async function validateAccessToken(accessToken) {
+    if (!accessToken) {
+        return false;
+    }
+    try {
+        const userinfoUrl = `${config.openIdConnectEndpoint}/api/userinfo`;
+        const userinfoResponse = await fetch(userinfoUrl, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Accept': 'application/json'
+            }
+        });
+        return userinfoResponse.ok;
+    } catch (error) {
+        console.error("Error validating token during WebSocket connection:", error);
+        return false;
+    }
+}
+
 
 
 app.get('/', async (req, res) => {
@@ -257,7 +291,6 @@ app.get('/', async (req, res) => {
                         ethTimestampSpan.textContent = '';
                         dogeTimestampSpan.textContent = '';
 
-
                         wsCrypto = new WebSocket('wss://localhost:' + ${PORT}); 
 
                         wsCrypto.onopen = () => {
@@ -288,11 +321,15 @@ app.get('/', async (req, res) => {
                             }
                         };
 
-                        wsCrypto.onclose = () => {
-                            console.log('Disconnected from local WebSocket for crypto updates.');
-                            btcPriceSpan.textContent = 'Disconnected';
-                            ethPriceSpan.textContent = 'Disconnected';
-                            dogePriceSpan.textContent = 'Disconnected';
+                        wsCrypto.onclose = (event) => { 
+                            console.log('Disconnected from local WebSocket for crypto updates.', event);
+                            let message = 'Disconnected';
+                            if (event.code === 1008) { 
+                                message = 'Authorization required or expired. Please login again.';
+                            }
+                            btcPriceSpan.textContent = message;
+                            ethPriceSpan.textContent = message;
+                            dogePriceSpan.textContent = message;
                             btcTimestampSpan.textContent = '';
                             ethTimestampSpan.textContent = '';
                             dogeTimestampSpan.textContent = '';
@@ -391,7 +428,7 @@ app.get('/logout', (req, res) => {
         binanceWsEth.close();
         binanceWsEth = null;
     }
-    if (binanceWsDoge) { 
+    if (binanceWsDoge) {
         binanceWsDoge.close();
         binanceWsDoge = null;
     }
@@ -410,8 +447,30 @@ const server = https.createServer(httpsOptions, app);
 
 const wss = new WebSocket.Server({ server });
 
-wss.on('connection', ws => {
-    console.log('Client connected to our secure WebSocket server');
+wss.on('connection', async (ws, request) => { 
+    console.log('Client attempting to connect to WebSocket server...');
+
+    const cookieHeader = request.headers.cookie;
+    console.log(`WebSocket: Received cookie header: ${cookieHeader ? cookieHeader.split(';').map(c => c.trim().split('=')[0]).join(', ') : 'None'}`);
+    const accessToken = parseAccessTokenFromCookie(cookieHeader);
+
+    if (!accessToken) {
+        console.log('WebSocket connection denied: No access token found in cookies.');
+        ws.close(1008, 'Unauthorized: No token provided. Please log in.'); 
+        return; 
+    }
+
+    console.log('WebSocket: Access token found. Initiating validation...');
+    const isValid = await validateAccessToken(accessToken);
+
+    if (!isValid) {
+        console.log('WebSocket connection denied: Invalid or expired access token.');
+        ws.close(1008, 'Unauthorized: Invalid or expired token. Please log in again.');
+        return; 
+    }
+
+
+    console.log('WebSocket connection authorized for cryptocurrency updates.');
 
     setupBinanceWebSocket('BTCUSDT');
     setupBinanceWebSocket('ETHUSDT');
